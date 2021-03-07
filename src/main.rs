@@ -1,5 +1,6 @@
 use config::Config;
 use model::DataTrees;
+use std::env;
 
 use warp::Filter;
 mod base32;
@@ -8,9 +9,17 @@ mod controller;
 mod highlighter;
 mod markdown;
 mod model;
+
+
 #[tokio::main]
 async fn main() {
     let config: Config = config::Config::load(None).await.unwrap_or_default();
+
+    /* very hacky, but serves my usecase! */
+    let token: &'static str = Box::leak(env::var("AUTH_ADMIN_TOKEN").unwrap().into_boxed_str());
+
+    let admin_only = warp::header::exact("authorization", &token);
+
     let help = markdown::render(
         tokio::fs::read_to_string("README.md")
             .await
@@ -30,10 +39,12 @@ async fn main() {
     let model_filter = warp::any().map(move || model.clone());
     let help_route = warp::path::end()
         .and(warp::get())
+        // d.and(admin_only)
         .map(move || warp::reply::html(help.clone()));
     let upload_route = warp::path::end()
         .or(warp::path("u"))
         .unify()
+        .and(admin_only)
         .and(warp::path::full())
         .and(warp::post())
         .and(warp::multipart::form().max_length(config.max_length))
@@ -42,6 +53,7 @@ async fn main() {
         .and_then(controller::upload);
     let custom_url_route = warp::post()
         .and(warp::path!(String))
+        .and(admin_only)
         .and(warp::path::full())
         .and(warp::multipart::form().max_length(config.max_length))
         .and(model_filter.clone())
@@ -52,11 +64,13 @@ async fn main() {
         .and(model_filter.clone())
         .and_then(controller::view_data);
     let delete_route = warp::delete()
+        .and(admin_only)
         .and(warp::path!(String))
         .and(model_filter.clone())
         .and_then(controller::delete_data);
     let update_route = warp::put()
         .and(warp::path!(String))
+        .and(admin_only)
         .and(model_filter.clone())
         .and(warp::header::<String>("host"))
         .and(warp::multipart::form().max_length(config.max_length))
